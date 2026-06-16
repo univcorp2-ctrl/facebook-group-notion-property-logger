@@ -47,10 +47,7 @@ def first_match(patterns: list[re.Pattern[str]], text: str) -> str | None:
 
 
 def extract_property_details(text: str) -> dict[str, Any]:
-    """Extract common Japanese real-estate fields from a post body.
-
-    This is intentionally rule-based and transparent. It is not a legal or valuation parser.
-    """
+    """Extract common Japanese real-estate fields from a post body."""
     normalized = normalize_whitespace(text)
     details: dict[str, Any] = {
         "price": first_match(PRICE_PATTERNS, text),
