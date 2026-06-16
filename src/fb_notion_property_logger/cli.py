@@ -17,7 +17,7 @@ from .facebook_api import (
 )
 from .models import SourcePost, SyncResult
 from .notion import NotionClient, build_notion_blocks
-from .source import SourceError, load_posts_from_file
+from .source import SourceError, load_posts_from_file, normalize_record
 from .state import ProcessedStore
 
 
@@ -29,13 +29,13 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     probe = subparsers.add_parser("probe-facebook", help="Check official Graph API availability")
-    probe.add_argument("--group-id", default=DEFAULT_GROUP_ID, help="Facebook group ID or group URL")
+    probe.add_argument("--group-id", default=DEFAULT_GROUP_ID, help="Facebook group ID or URL")
     probe.add_argument("--api-version", default=DEFAULT_FACEBOOK_API_VERSION)
     probe.add_argument("--output", type=Path, default=None)
     probe.set_defaults(func=run_probe_facebook)
 
-    fetch = subparsers.add_parser("fetch-facebook", help="Fetch group feed through official Graph API")
-    fetch.add_argument("--group-id", default=DEFAULT_GROUP_ID, help="Facebook group ID or group URL")
+    fetch = subparsers.add_parser("fetch-facebook", help="Fetch group feed through Graph API")
+    fetch.add_argument("--group-id", default=DEFAULT_GROUP_ID, help="Facebook group ID or URL")
     fetch.add_argument("--api-version", default=DEFAULT_FACEBOOK_API_VERSION)
     fetch.add_argument("--page-size", type=int, default=25)
     fetch.add_argument("--max-pages", type=int, default=20)
@@ -121,12 +121,24 @@ def run_fetch_facebook(args: argparse.Namespace) -> int:
     return 0
 
 
-def sync_posts(posts: list[SourcePost], config: Config, state_db: Path, dry_run: bool) -> dict[str, Any]:
+def _notion_error_payload() -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": "NOTION_TOKEN and NOTION_PAGE_ID are required unless dry_run is used",
+    }
+
+
+def sync_posts(
+    posts: list[SourcePost],
+    config: Config,
+    state_db: Path,
+    dry_run: bool,
+) -> dict[str, Any]:
     store = ProcessedStore(state_db)
     notion: NotionClient | None = None
     if not dry_run:
         if not config.notion_token or not config.notion_page_id:
-            return {"ok": False, "error": "NOTION_TOKEN and NOTION_PAGE_ID are required unless dry_run is used"}
+            return _notion_error_payload()
         notion = NotionClient(config.notion_token, config.notion_version)
 
     results: list[SyncResult] = []
@@ -139,7 +151,15 @@ def sync_posts(posts: list[SourcePost], config: Config, state_db: Path, dry_run:
         try:
             title, details, blocks = build_notion_blocks(post)
             if dry_run:
-                dry_run_payloads.append({"key": key, "url": post.url, "title": title, "details": details, "block_count": len(blocks)})
+                dry_run_payloads.append(
+                    {
+                        "key": key,
+                        "url": post.url,
+                        "title": title,
+                        "details": details,
+                        "block_count": len(blocks),
+                    }
+                )
                 results.append(SyncResult(key=key, url=post.url, status="dry_run", title=title))
             else:
                 assert notion is not None
@@ -179,13 +199,19 @@ def run_sync(args: argparse.Namespace) -> int:
 def run_pipeline(args: argparse.Namespace) -> int:
     token = os.getenv("FACEBOOK_ACCESS_TOKEN")
     if not token:
-        write_output({"ok": False, "error": "FACEBOOK_ACCESS_TOKEN is required for pipeline fetch"}, args.output)
+        write_output({"ok": False, "error": "FACEBOOK_ACCESS_TOKEN is required"}, args.output)
         return 2
-    posts = fetch_group_feed(args.group_id, token, args.api_version, args.page_size, args.max_pages, args.since, args.until)
+    posts = fetch_group_feed(
+        args.group_id,
+        token,
+        args.api_version,
+        args.page_size,
+        args.max_pages,
+        args.since,
+        args.until,
+    )
     source_payload = graph_posts_to_source_payload(posts)
     write_output(source_payload, args.source_output)
-    from .source import normalize_record
-
     normalized_posts = [normalize_record(row) for row in source_payload["posts"]]
     config = Config.from_env()
     state_db = args.state_db or config.state_db_path
