@@ -1,0 +1,19 @@
+{
+  "posts": [
+    {
+      "id": "sample-001",
+      "post_url": "https://www.facebook.com/groups/1281008662437696/posts/1234567890/",
+      "content": "東京都渋谷区。1LDK、賃料18万円、45㎡、渋谷駅徒歩8分。ペット相談、内見可。詳細 https://example.com/property/123",
+      "created_time": "2026-06-16T09:00:00+09:00",
+      "author": "Example Agent",
+      "attachments": ["https://example.com/property/123"]
+    },
+    {
+      "id": "sample-002",
+      "post_url": "https://www.facebook.com/groups/1281008662437696/posts/9876543210/",
+      "content": "所在地: 神奈川県横浜市西区。2LDK 58.2㎡ 家賃22万円 最寄駅: 横浜駅徒歩10分 駐車場あり。",
+      "created_time": "2026-06-16T10:30:00+09:00",
+      "author": "Example Owner"
+    }
+  ]
+}
