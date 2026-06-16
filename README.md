@@ -1,23 +1,105 @@
 # Facebook Group Notion Property Logger
 
-Facebookグループの物件投稿を、許可済みデータソースから読み込み、投稿URL・本文・抽出した物件情報をNotionの**単独ページ**へ追記するPythonスクリプトです。
+Facebookグループの物件投稿を、安定的・監査可能・非回避的な方法でNotionの**単独ページ**へ記録するPythonプロジェクトです。
 
-> 重要: このリポジトリは、Facebookの画面を自動操作して「人間っぽく見せる」スクレイピングや検知回避を行いません。MetaのGroups APIはv19.0で非推奨化され、2024-04-22以降は全バージョンから削除されたため、現在はグループ投稿の直接API取得を前提にしていません。代わりに、利用権限のあるCSV/JSON、社内で許可されたエクスポート、または正規に取得した投稿データを入力にします。
+対象グループ:
 
-## できること
+```text
+https://www.facebook.com/groups/1281008662437696
+```
 
-- CSV/JSONの投稿データを読み込み
-- 投稿URL、本文、投稿日時、投稿者、添付URLをNotionページへ追記
-- 家賃・価格、所在地、最寄駅、間取り、面積などを簡易抽出
-- SQLiteで処理済み投稿を記録し、重複追記を防止
-- GitHub Actionsでテスト、dry-run、手動/定期実行
-- Codespaces/devcontainerで即実行できる開発環境
+## 方針
 
-## できないこと
+- まず公式Graph APIで対象グループIDの取得可否を検査します。
+- Graph APIで取れる場合はページングで投稿を取得し、JSONに正規化します。
+- Graph APIが権限・仕様・廃止状況により使えない場合は、権限のあるCSV/JSON入力を使います。
+- Notionには1ページへ追記します。
+- SQLiteで処理済み投稿を記録し、重複追記を防ぎます。
+- テストは外部ネットワークに依存せず、50回反復できる品質ゲートを用意しています。
 
-- Facebookログイン画面やグループ画面の自動ブラウザ操作
-- CAPTCHA、レート制限、Bot検知、利用規約制限の回避
-- 権限のないグループ、非公開投稿、第三者投稿の無断取得
+## 重要な制約
+
+このリポジトリは、Facebookのログイン済み画面を自動操作して「人間っぽく見せる」スクレイピングや検知回避を行いません。CAPTCHA回避、Cookie流用、fingerprint偽装、Bot検知回避、レート制限回避は実装しません。
+
+MetaはGraph API v19.0でFacebook Groups APIを非推奨化し、2024-04-22に全バージョンへ適用すると発表しています。そのため、直接のグループ投稿取得は、現在のMeta側の提供状況・アプリ権限・グループ権限に依存します。このプロジェクトは取得できるかを `probe-facebook` で明示的に検査し、取得不可なら構造化エラーを残します。
+
+## 主要コマンド
+
+### インストール
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e '.[dev]'
+```
+
+### Facebook API取得可否の検査
+
+```bash
+export FACEBOOK_ACCESS_TOKEN='EAAB...'
+python -m fb_notion_property_logger probe-facebook \
+  --group-id https://www.facebook.com/groups/1281008662437696 \
+  --output out/facebook-probe.json
+```
+
+トークンがない場合も、どのGraph API URLを検査するかと、必要な環境変数をJSONで出力します。
+
+### Graph APIで取得できる場合
+
+```bash
+python -m fb_notion_property_logger fetch-facebook \
+  --group-id 1281008662437696 \
+  --page-size 25 \
+  --max-pages 20 \
+  --output data/import/posts.json
+```
+
+### 許可済みCSV/JSONからNotion dry-run
+
+```bash
+python -m fb_notion_property_logger sync \
+  --source data/sample_posts.json \
+  --dry-run \
+  --output out/dry-run-result.json
+```
+
+### Notionへ実際に追記
+
+```bash
+export NOTION_TOKEN='secret_xxx'
+export NOTION_PAGE_ID='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+python -m fb_notion_property_logger sync \
+  --source data/import/posts.json \
+  --output out/live-sync-result.json
+```
+
+### Facebook取得からNotion追記まで一括
+
+```bash
+export FACEBOOK_ACCESS_TOKEN='EAAB...'
+export NOTION_TOKEN='secret_xxx'
+export NOTION_PAGE_ID='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+python -m fb_notion_property_logger pipeline \
+  --group-id 1281008662437696 \
+  --max-pages 20 \
+  --page-size 25 \
+  --output out/pipeline-result.json
+```
+
+## 品質ゲート
+
+```bash
+QUALITY_REPEAT_COUNT=50 bash scripts/quality_gate.sh
+```
+
+内容:
+
+- `python -m compileall -q src tests`
+- `ruff check .`
+- `pytest -q` を50回反復
+- サンプル投稿のNotion dry-run
+- Facebook probeのトークンなし制御エラー確認
+- `out/quality-gate-report.json` 生成
 
 ## 入力形式
 
@@ -45,61 +127,39 @@ id,post_url,content,created_time,author
 sample-001,https://www.facebook.com/groups/1281008662437696/posts/1234567890/,東京都渋谷区 1LDK 賃料18万円 45㎡ 渋谷駅徒歩8分,2026-06-16T09:00:00+09:00,Example Agent
 ```
 
-## ローカル実行
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev]'
-python -m fb_notion_property_logger sync --source data/sample_posts.json --dry-run
-```
-
-Notionへ実際に追記する場合:
-
-```bash
-export NOTION_TOKEN='secret_xxx'
-export NOTION_PAGE_ID='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
-python -m fb_notion_property_logger sync --source data/sample_posts.json
-```
-
-## GitHub Actionsで自動実行
-
-1. GitHub repository settingsでSecretsを追加します。
-   - `NOTION_TOKEN`: Notion integration token
-   - `NOTION_PAGE_ID`: 追記先NotionページID
-2. 入力ファイルを `data/import/posts.json` または `data/import/posts.csv` に置きます。
-3. Actionsの `Property logger CI` workflow を手動実行します。
-   - `run_live=true` のときだけNotionに追記します。
-   - schedule実行時もSecretsと入力ファイルが揃っていれば自動同期します。
-
-## Mermaid architecture
+## Architecture
 
 ```mermaid
 flowchart LR
-  A[Authorized CSV/JSON source] --> B[Loader]
-  B --> C[Property parser]
-  C --> D[SQLite processed state]
-  D --> E{Already processed?}
-  E -- no --> F[Notion block builder]
-  F --> G[Notion single page]
-  E -- yes --> H[Skip]
-  I[GitHub Actions] --> B
+  A[Facebook Graph API probe/fetch] --> B[Normalized JSON]
+  C[Authorized CSV/JSON fallback] --> D[Loader]
+  B --> D
+  D --> E[Property parser]
+  E --> F[SQLite processed state]
+  F --> G{Duplicate?}
+  G -- no --> H[Notion block builder]
+  H --> I[Single Notion page]
+  G -- yes --> J[Skip]
+  K[Quality gate x50] --> D
 ```
 
-## 主要コマンド
+詳細は以下を参照してください。
 
-```bash
-python -m fb_notion_property_logger sync --source data/sample_posts.json --dry-run
-python -m fb_notion_property_logger sync --source data/sample_posts.json --dry-run --output out/result.json
-python -m fb_notion_property_logger sync --source data/sample_posts.json --dry-run --reset-state
-```
+- `docs/architecture.md`
+- `docs/setup.md`
+- `docs/quality-gates.md`
+- `docs/review-packet.md`
+- `AGENTS.md`
+- `CODEX.md`
+
+## GitHub Actions note
+
+この連携環境では `.github/workflows/*` の作成がGitHub API 404で拒否されました。そのため、実行可能なworkflow定義は `docs/ci-workflow.yml` に保存しています。workflow作成権限がある環境では、このファイルを `.github/workflows/quality-gate.yml` に配置すると、同じ品質ゲートをActionsで実行できます。
 
 ## 本番運用に必要なもの
 
-- Notion integration token
-- 追記先NotionページID
-- Facebook投稿データを取得する正当な入力元
-- GitHub Actionsで使う場合はGitHub Secrets
-- 取り込み対象のCSV/JSONを更新する運用
-
-詳細は [`docs/setup.md`](docs/setup.md) と [`docs/architecture.md`](docs/architecture.md) を参照してください.
+- `NOTION_TOKEN`
+- `NOTION_PAGE_ID`
+- 任意: `FACEBOOK_ACCESS_TOKEN`
+- Graph APIで取れない場合の許可済みCSV/JSON入力
+- `QUALITY_REPEAT_COUNT=50 bash scripts/quality_gate.sh` の合格結果
