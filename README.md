@@ -89,13 +89,8 @@ flowchart LR
 ## 主要コマンド
 
 ```bash
-# dry-run
 python -m fb_notion_property_logger sync --source data/sample_posts.json --dry-run
-
-# 結果JSONを保存
 python -m fb_notion_property_logger sync --source data/sample_posts.json --dry-run --output out/result.json
-
-# 処理済み状態を初期化して再処理
 python -m fb_notion_property_logger sync --source data/sample_posts.json --dry-run --reset-state
 ```
 
