@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+.env
+*.sqlite
+*.sqlite3
+out/
+data/import/*.json
+data/import/*.csv
+!data/import/.gitkeep
