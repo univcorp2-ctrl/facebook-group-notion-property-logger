@@ -10,7 +10,7 @@ ruff check .
 for i in $(seq 1 "$REPEAT_COUNT"); do
   echo "pytest iteration ${i}/${REPEAT_COUNT}"
   pytest -q
- done
+done
 
 python -m fb_notion_property_logger sync \
   --source data/sample_posts.json \
@@ -31,6 +31,7 @@ fi
 
 python - <<'PY'
 import json
+import os
 from pathlib import Path
 
 probe = json.loads(Path('out/facebook-probe-without-token.json').read_text(encoding='utf-8'))
@@ -38,14 +39,18 @@ assert probe['token_provided'] is False
 assert probe['ok'] is False
 assert all('FACEBOOK_ACCESS_TOKEN' in (item.get('error') or '') for item in probe['probes'])
 
+repeat_count = int(os.environ.get('QUALITY_REPEAT_COUNT', '50'))
 report = {
     'ok': True,
-    'pytest_iterations': int('${REPEAT_COUNT}'),
+    'pytest_iterations': repeat_count,
     'compileall': 'passed',
     'ruff': 'passed',
     'dry_run_artifact': 'out/dry-run-result.json',
     'facebook_probe_without_token': 'validated',
 }
-Path('out/quality-gate-report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+Path('out/quality-gate-report.json').write_text(
+    json.dumps(report, ensure_ascii=False, indent=2) + '\n',
+    encoding='utf-8',
+)
 print(json.dumps(report, ensure_ascii=False, indent=2))
 PY
