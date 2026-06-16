@@ -47,8 +47,12 @@ def graph_url(api_version: str, path: str, params: dict[str, Any] | None = None)
     return f"{base}?{encoded}" if encoded else base
 
 
-def build_group_probe_urls(group_id: str, api_version: str = DEFAULT_FACEBOOK_API_VERSION) -> dict[str, str]:
+def build_group_probe_urls(
+    group_id: str,
+    api_version: str = DEFAULT_FACEBOOK_API_VERSION,
+) -> dict[str, str]:
     gid = normalize_group_id(group_id)
+    feed_fields = "id,message,story,created_time,updated_time,permalink_url,attachments.limit(5)"
     return {
         "group_metadata": graph_url(
             api_version,
@@ -58,10 +62,7 @@ def build_group_probe_urls(group_id: str, api_version: str = DEFAULT_FACEBOOK_AP
         "group_feed": graph_url(
             api_version,
             f"{gid}/feed",
-            {
-                "fields": "id,message,story,created_time,updated_time,permalink_url,attachments.limit(5)",
-                "limit": 5,
-            },
+            {"fields": feed_fields, "limit": 5},
         ),
     }
 
@@ -85,9 +86,17 @@ def graph_get(
             if response.status_code < 400:
                 if isinstance(payload, dict):
                     return payload
-                raise FacebookApiError("Graph API returned a non-JSON success response", response.status_code, payload)
+                raise FacebookApiError(
+                    "Graph API returned a non-JSON success response",
+                    response.status_code,
+                    payload,
+                )
             if response.status_code not in RETRY_STATUS_CODES or attempt >= max_retries:
-                raise FacebookApiError(f"Graph API error {response.status_code}", response.status_code, payload)
+                raise FacebookApiError(
+                    f"Graph API error {response.status_code}",
+                    response.status_code,
+                    payload,
+                )
         except requests.RequestException as exc:
             last_error = exc
             if attempt >= max_retries:
@@ -121,7 +130,9 @@ def probe_group_api(
             payload = graph_get(url, access_token, max_retries=1, base_delay_seconds=0.1)
             probes.append(FacebookEndpointProbe(name, "GET", url, 200, True, payload))
         except FacebookApiError as exc:
-            probes.append(FacebookEndpointProbe(name, "GET", url, exc.status_code, False, exc.response, str(exc)))
+            probes.append(
+                FacebookEndpointProbe(name, "GET", url, exc.status_code, False, exc.response, str(exc))
+            )
     return probes
 
 
@@ -135,11 +146,12 @@ def fetch_group_feed(
     until: str | None = None,
 ) -> list[dict[str, Any]]:
     gid = normalize_group_id(group_id)
+    feed_fields = "id,message,story,created_time,updated_time,permalink_url,attachments.limit(10)"
     url = graph_url(
         api_version,
         f"{gid}/feed",
         {
-            "fields": "id,message,story,created_time,updated_time,permalink_url,attachments.limit(10)",
+            "fields": feed_fields,
             "limit": max(1, min(page_size, 100)),
             "since": since,
             "until": until,
@@ -151,7 +163,10 @@ def fetch_group_feed(
         payload = graph_get(url, access_token)
         data = payload.get("data", [])
         if not isinstance(data, list):
-            raise FacebookApiError("Graph API feed response did not contain a data list", response=payload)
+            raise FacebookApiError(
+                "Graph API feed response did not contain a data list",
+                response=payload,
+            )
         posts.extend(item for item in data if isinstance(item, dict))
         next_url = payload.get("paging", {}).get("next")
         url = next_url if isinstance(next_url, str) else ""
@@ -171,7 +186,12 @@ def _extract_attachment_urls(attachments: dict[str, Any] | None) -> list[str]:
             continue
         target = item.get("target")
         media = item.get("media")
-        for value in (item.get("url"), target.get("url") if isinstance(target, dict) else None, media.get("src") if isinstance(media, dict) else None):
+        candidates = [item.get("url")]
+        if isinstance(target, dict):
+            candidates.append(target.get("url"))
+        if isinstance(media, dict):
+            candidates.append(media.get("src"))
+        for value in candidates:
             if isinstance(value, str) and value:
                 urls.append(value)
         subattachments = item.get("subattachments")
