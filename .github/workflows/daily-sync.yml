@@ -1,0 +1,98 @@
+name: 日次物件同期
+
+on:
+  schedule:
+    # 毎日 01:00 UTC (JST 10:00) に実行
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "true にするとNotionへの書き込みをスキップ（テスト用）"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      since:
+        description: "取得開始日 (例: 2026-06-15)。省略時は前日から取得"
+        required: false
+        default: ""
+
+jobs:
+  daily-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 依存パッケージをインストール
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - name: 処理済み状態DBのキャッシュを復元
+        uses: actions/cache@v4
+        with:
+          path: .state/processed.sqlite3
+          key: property-sync-state-${{ runner.os }}-${{ github.run_number }}
+          restore-keys: |
+            property-sync-state-${{ runner.os }}-
+
+      - name: 取得開始日を計算
+        id: since
+        run: |
+          if [ -n "${{ github.event.inputs.since }}" ]; then
+            echo "since=${{ github.event.inputs.since }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "since=$(date -u -d 'yesterday' '+%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: FacebookグループからNotionへ同期
+        id: sync
+        continue-on-error: true
+        env:
+          FACEBOOK_ACCESS_TOKEN: ${{ secrets.FACEBOOK_ACCESS_TOKEN }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_PAGE_ID: ${{ secrets.NOTION_PAGE_ID }}
+        run: |
+          SINCE="${{ steps.since.outputs.since }}"
+          DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
+          echo "取得開始日: $SINCE"
+          echo "DryRun: $DRY_RUN"
+
+          ARGS="--group-id 1281008662437696 --since $SINCE --max-pages 5 --page-size 25 \
+                --source-output out/facebook-posts.json --output out/daily-sync-result.json"
+
+          if [ "$DRY_RUN" = "true" ]; then
+            python -m fb_notion_property_logger pipeline $ARGS --dry-run
+          else
+            python -m fb_notion_property_logger pipeline $ARGS
+          fi
+
+      - name: 結果サマリーを表示
+        if: always()
+        run: |
+          if [ -f out/daily-sync-result.json ]; then
+            echo "### 同期結果" >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat out/daily-sync-result.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### 同期結果ファイルが見つかりません" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: アーティファクトを保存
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: daily-sync-${{ github.run_id }}
+          path: |
+            out/daily-sync-result.json
+            out/facebook-posts.json
+          if-no-files-found: ignore
+
+      - name: 同期ステップが失敗した場合に終了コードを伝播
+        if: steps.sync.outcome == 'failure'
+        run: exit 1
