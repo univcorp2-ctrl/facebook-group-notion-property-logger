@@ -1,65 +1,74 @@
 # Architecture
 
-このプロジェクトは、Facebookグループ画面を自動操作するスクレイパーではありません。許可済みのCSV/JSONを入力にし、Notionの単独ページへ物件投稿を追記する同期パイプラインです。
+This project records property posts into a single Notion page through a stable, authorized pipeline.
 
-## Components
+It does **not** automate a logged-in browser, spoof a human, bypass CAPTCHA, replay cookies, or work around platform rate limits. Stability is achieved through official APIs where available, authorized CSV/JSON fallbacks, idempotent state, conservative retries, and observable JSON artifacts.
+
+## System overview
 
 ```mermaid
 flowchart TB
-  subgraph Source[Authorized input]
-    A1[CSV]
-    A2[JSON]
-    A3[Approved internal export]
+  subgraph Facebook[Facebook authorized path]
+    F1[FACEBOOK_ACCESS_TOKEN]
+    F2[Graph API probe]
+    F3[Graph API feed fetch]
   end
 
-  A1 --> B[Source loader]
-  A2 --> B
-  A3 --> B
-  B --> C[Normalizer]
-  C --> D[Rule-based property parser]
-  D --> E[Notion block builder]
-  C --> F[SQLite processed state]
-  F --> G{Duplicate?}
-  G -- yes --> H[Skip]
-  G -- no --> E
-  E --> I[Notion API: append block children]
-  I --> J[Single target Notion page]
+  subgraph Fallback[Authorized fallback path]
+    A1[CSV export]
+    A2[JSON export]
+    A3[Admin-approved internal source]
+  end
 
-  K[GitHub Actions] --> B
-  K --> L[pytest / ruff / dry-run artifact]
+  F1 --> F2
+  F2 --> F3
+  F3 --> N1[Normalized SourcePost JSON]
+  A1 --> L[Source loader]
+  A2 --> L
+  A3 --> L
+  N1 --> L
+  L --> P[Rule-based property parser]
+  P --> S[SQLite processed state]
+  S --> D{Duplicate?}
+  D -- yes --> Skip[Skip]
+  D -- no --> B[Notion block builder]
+  B --> N[Notion append block children API]
+  N --> Page[Single Notion target page]
+  Q[Quality gate: ruff + compile + pytest x50 + dry-run] --> L
 ```
+
+## Components
+
+| Component | File | Purpose |
+| --- | --- | --- |
+| CLI | `src/fb_notion_property_logger/cli.py` | Commands for probe, fetch, sync, and pipeline |
+| Facebook API adapter | `src/fb_notion_property_logger/facebook_api.py` | Official Graph API probing/fetching with retry and paging |
+| Source loader | `src/fb_notion_property_logger/source.py` | CSV/JSON normalization into `SourcePost` |
+| Parser | `src/fb_notion_property_logger/parsers.py` | Extracts price, location, station, layout, size, and features |
+| State store | `src/fb_notion_property_logger/state.py` | SQLite duplicate prevention |
+| Notion client | `src/fb_notion_property_logger/notion.py` | Appends blocks to one Notion page |
+| Quality gate | `scripts/quality_gate.sh` | Objective checks including 50 pytest repetitions |
 
 ## Data flow
 
-1. `source.py` がCSV/JSONを読み込みます。
-2. `models.SourcePost` に正規化します。
-3. `state.ProcessedStore` が投稿URL由来のハッシュで重複を判定します。
-4. `parsers.py` が物件情報を簡易抽出します。
-5. `notion.py` がNotion block payloadを作成します。
-6. `NotionClient.append_to_page()` が `PATCH /v1/blocks/{page_id}/children` を呼びます。
-7. 成功後、SQLiteに処理済みキーを保存します。
+1. `probe-facebook` checks whether the supplied group ID can be reached through Graph API using `FACEBOOK_ACCESS_TOKEN`.
+2. `fetch-facebook` requests the feed with paging if the token and permissions allow it.
+3. If Graph API cannot retrieve the group feed, operators provide authorized `posts.json` or `posts.csv`.
+4. `sync` normalizes posts, extracts real-estate fields, checks SQLite for duplicates, and appends new records to the Notion page.
+5. Every dry-run and quality check writes JSON artifacts under `out/`.
 
-## Security and compliance posture
+## Failure behavior
 
-- Facebookログイン、Cookie、セッション、2FA、CAPTCHAを扱いません。
-- ブラウザ自動化や検知回避を行いません。
-- SecretsはGitHub Secretsまたはローカル環境変数で管理します。
-- Notion tokenはリポジトリに保存しません。
-- 入力ファイルはユーザーが取得権限を持つデータだけを置く前提です。
+- Missing Facebook token: exits with code 2 and writes a probe report.
+- Graph API denied or removed: writes the exact HTTP status and response body to the probe/fetch output.
+- Missing Notion credentials: exits before sending data unless `--dry-run` is used.
+- Duplicate post URL: skipped via SHA-256 stable key.
+- Too many Notion blocks: automatically split into batches of 100 blocks per request.
 
-## Production requirements
+## Stability strategy
 
-| Item | Required | Purpose |
-| --- | --- | --- |
-| `NOTION_TOKEN` | yes | Notion API authentication |
-| `NOTION_PAGE_ID` | yes | Target single page to append records |
-| CSV/JSON source | yes | Authorized post data input |
-| GitHub Actions schedule | optional | Periodic sync |
-| SQLite state file/cache | recommended | Duplicate prevention |
-
-## Extension points
-
-- `source.py` に別の許可済み入力アダプタを追加できます。
-- `parsers.py` の正規表現を地域・物件種別ごとに拡張できます。
-- Notion databaseへ行として保存するモードを追加できます。
-- Slack/メール通知を同期完了時に追加できます。
+- No brittle browser DOM automation.
+- No dependency on UI timing, scroll behavior, cookies, or screenshots.
+- API calls use bounded retries on retryable status codes only.
+- All live data paths produce replayable JSON.
+- Tests mock external services, so CI is deterministic.
